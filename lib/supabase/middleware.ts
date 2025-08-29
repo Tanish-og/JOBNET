@@ -1,4 +1,4 @@
-import { createClient } from "@supabase/supabase-js"
+import { createMiddlewareClient } from "@supabase/auth-helpers-nextjs"
 import { NextResponse, type NextRequest } from "next/server"
 
 // Check if Supabase environment variables are available
@@ -16,7 +16,11 @@ export async function updateSession(request: NextRequest) {
     })
   }
 
-  const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!)
+  const response = NextResponse.next({
+    request,
+  })
+
+  const supabase = createMiddlewareClient({ req: request, res: response })
 
   // Check if this is an auth callback
   const requestUrl = new URL(request.url)
@@ -32,9 +36,12 @@ export async function updateSession(request: NextRequest) {
   // Protected routes - redirect to login if not authenticated
   const publicRoutes = ["/", "/auth/login", "/auth/sign-up", "/auth/callback"]
 
-  const isPublicRoute = publicRoutes.some(
-    (route) => request.nextUrl.pathname === route || request.nextUrl.pathname.startsWith(route),
-  )
+  const isPublicRoute = publicRoutes.some((route) => {
+    if (route === "/") {
+      return request.nextUrl.pathname === "/"
+    }
+    return request.nextUrl.pathname === route || request.nextUrl.pathname.startsWith(route)
+  })
 
   if (!isPublicRoute) {
     try {
@@ -53,7 +60,5 @@ export async function updateSession(request: NextRequest) {
     }
   }
 
-  return NextResponse.next({
-    request,
-  })
+  return response
 }

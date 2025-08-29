@@ -10,7 +10,7 @@ export const isSupabaseConfigured =
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY.length > 0
 
 // Create a cached version of the Supabase client for Server Components
-export const createClient = cache(() => {
+const createClient = cache(() => {
   const cookieStore = cookies()
 
   if (!isSupabaseConfigured) {
@@ -25,3 +25,6 @@ export const createClient = cache(() => {
 
   return createServerComponentClient({ cookies: () => cookieStore })
 })
+
+export default createClient
+export { createClient }

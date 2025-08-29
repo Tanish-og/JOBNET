@@ -149,7 +149,13 @@ export async function postJob(prevState: any, formData: FormData) {
 
   const {
     data: { user },
+    error: userErr,
   } = await supabase.auth.getUser()
+
+  if (userErr) {
+    console.log("[v0] auth.getUser error:", userErr.message)
+    return { error: "Authentication error. Please sign in again." }
+  }
   if (!user) {
     return { error: "Not authenticated" }
   }
@@ -165,7 +171,7 @@ export async function postJob(prevState: any, formData: FormData) {
   const budgetMin = formData.get("budgetMin")
   const budgetMax = formData.get("budgetMax")
 
-  // Added blockchain payment fields
+  // Blockchain payment fields
   const transactionHash = formData.get("transactionHash")
   const walletAddress = formData.get("walletAddress")
   const blockchain = formData.get("blockchain")
@@ -174,59 +180,103 @@ export async function postJob(prevState: any, formData: FormData) {
     return { error: "Title, description, and job type are required" }
   }
 
-  // Validate payment information
+  // Require payment details before posting
   if (!transactionHash || !walletAddress || !blockchain) {
     return { error: "Payment verification required. Please complete the blockchain payment." }
   }
 
-  const jobData: any = {
+  // Prepare full payload (for advanced schema)
+  const fullJobData: any = {
     posted_by: user.id,
     title: title.toString(),
     description: description.toString(),
     job_type: jobType.toString(),
     location: location?.toString() || null,
-    remote_allowed: remoteAllowed,
     skills_required: requiredSkills?.toString() || null,
     status: "active",
+    remote_allowed: remoteAllowed,
   }
 
-  // Add salary or budget based on job type
   if (jobType === "freelance" || jobType === "contract") {
-    if (budgetMin) jobData.budget_min = Number.parseFloat(budgetMin.toString())
-    if (budgetMax) jobData.budget_max = Number.parseFloat(budgetMax.toString())
+    if (budgetMin) fullJobData.budget_min = Number.parseFloat(budgetMin.toString())
+    if (budgetMax) fullJobData.budget_max = Number.parseFloat(budgetMax.toString())
   } else {
-    if (salaryMin) jobData.salary_min = Number.parseFloat(salaryMin.toString())
-    if (salaryMax) jobData.salary_max = Number.parseFloat(salaryMax.toString())
+    if (salaryMin) fullJobData.salary_min = Number.parseFloat(salaryMin.toString())
+    if (salaryMax) fullJobData.salary_max = Number.parseFloat(salaryMax.toString())
   }
 
-  // Insert job and payment record in a transaction
-  const { data: job, error: jobError } = await supabase.from("jobs").insert(jobData).select().single()
+  // Minimal payload (for basic schema)
+  const minimalJobData: any = {
+    posted_by: user.id,
+    title: title.toString(),
+    description: description.toString(),
+    job_type: jobType.toString(),
+    location: location?.toString() || null,
+    skills_required: requiredSkills?.toString() || null,
+  }
+  if (salaryMin) minimalJobData.salary_min = Number.parseFloat(salaryMin.toString())
+  if (salaryMax) minimalJobData.salary_max = Number.parseFloat(salaryMax.toString())
 
-  if (jobError) {
-    return { error: jobError.message }
+  // Try full insert first, then retry with minimal fields if schema is simpler
+  let jobId: string | null = null
+  try {
+    const { data: job1, error: err1 } = await supabase.from("jobs").insert(fullJobData).select().single()
+    if (err1) {
+      console.log("[v0] jobs insert (full) failed:", err1.message)
+      // Retry with minimal columns in case schema misses advanced fields
+      const { data: job2, error: err2 } = await supabase.from("jobs").insert(minimalJobData).select().single()
+      if (err2) {
+        console.log("[v0] jobs insert (minimal) failed:", err2.message)
+        if (err2.message.toLowerCase().includes("relation") || err2.message.toLowerCase().includes("does not exist")) {
+          return {
+            error: "Database not initialized. Please run the SQL to create the jobs table in Supabase and try again.",
+          }
+        }
+        if (err2.message.toLowerCase().includes("foreign key")) {
+          return {
+            error: "Your account isn’t linked in the users table yet. Sign out and sign in again, then try posting.",
+          }
+        }
+        return { error: err2.message }
+      }
+      jobId = job2!.id
+    } else {
+      jobId = job1!.id
+    }
+  } catch (e: any) {
+    console.log("[v0] jobs insert threw:", e?.message || e)
+    return { error: "Could not create job. Please try again." }
   }
 
-  // Record the payment transaction
-  const { error: paymentError } = await supabase.from("payments").insert({
-    user_id: user.id,
-    job_id: job.id,
-    transaction_hash: transactionHash.toString(),
-    blockchain: blockchain.toString(),
-    amount: blockchain === "solana" ? 0.0001 : 0.00001,
-    currency: blockchain === "solana" ? "SOL" : blockchain === "polygon" ? "MATIC" : "ETH",
-    status: "confirmed",
-    admin_wallet:
-      blockchain === "solana"
+  // Record payment (non-blocking). If the payments table or columns aren’t there yet, we don’t fail the post.
+  try {
+    const amount = blockchain?.toString() === "solana" ? 0.0001 : 0.00001
+    const currency =
+      blockchain?.toString() === "solana" ? "SOL" : blockchain?.toString() === "polygon" ? "MATIC" : "ETH"
+
+    const adminWallet =
+      blockchain?.toString() === "solana"
         ? "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM"
-        : "0x742d35Cc6634C0532925a3b8D4C9db96C4b4d4d4",
-    user_wallet: walletAddress.toString(),
-  })
+        : "0x742d35Cc6634C0532925a3b8D4C9db96C4b4d4d4"
 
-  if (paymentError) {
-    console.error("Payment record error:", paymentError)
-    // Don't fail the job posting if payment recording fails
+    const { error: payErr } = await supabase.from("payments").insert({
+      user_id: user.id,
+      job_id: jobId,
+      transaction_hash: transactionHash.toString(),
+      blockchain: blockchain.toString(),
+      amount,
+      currency,
+      status: "confirmed",
+      admin_wallet: adminWallet,
+      user_wallet: walletAddress.toString(),
+    })
+    if (payErr) {
+      console.log("[v0] payments insert failed (non-blocking):", payErr.message)
+    }
+  } catch (e: any) {
+    console.log("[v0] payments insert threw (non-blocking):", e?.message || e)
   }
 
   revalidatePath("/jobs")
-  redirect(`/jobs/${job.id}`)
+  redirect(`/jobs/${jobId}`)
 }

@@ -1,7 +1,6 @@
 "use client"
 
 import type React from "react"
-
 import { useActionState } from "react"
 import { useFormStatus } from "react-dom"
 import { Button } from "@/components/ui/button"
@@ -9,7 +8,7 @@ import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
 import { Loader2, Plus, X } from "lucide-react"
-import { useState } from "react"
+import { useState, useRef } from "react"
 import { postJob } from "@/lib/actions"
 import PaymentModal from "@/components/web3/payment-modal"
 import { useWallet } from "@/lib/web3/wallet"
@@ -18,13 +17,19 @@ interface JobPostFormProps {
   hasWallet: boolean
 }
 
-function SubmitButton({ hasWallet, onPaymentRequired }: { hasWallet: boolean; onPaymentRequired: () => void }) {
+function SubmitButton({
+  hasWallet,
+  onPaymentRequired,
+}: {
+  hasWallet: boolean
+  onPaymentRequired: (e: React.MouseEvent<HTMLButtonElement>) => void
+}) {
   const { pending } = useFormStatus()
 
   return (
     <Button
       type="button"
-      onClick={onPaymentRequired}
+      onClick={(e) => onPaymentRequired(e)}
       disabled={pending || !hasWallet}
       className="bg-emerald-600 hover:bg-emerald-700 text-white disabled:opacity-50"
     >
@@ -48,6 +53,7 @@ export default function JobPostForm({ hasWallet }: JobPostFormProps) {
   const [showPaymentModal, setShowPaymentModal] = useState(false)
   const [formData, setFormData] = useState<FormData | null>(null)
   const { wallet } = useWallet()
+  const formRef = useRef<HTMLFormElement>(null)
 
   const addSkill = () => {
     if (newSkill.trim() && !skills.includes(newSkill.trim())) {
@@ -67,12 +73,12 @@ export default function JobPostForm({ hasWallet }: JobPostFormProps) {
     }
   }
 
-  const handlePaymentRequired = (e: React.FormEvent) => {
+  const handlePaymentRequired = (e: React.MouseEvent<HTMLButtonElement>) => {
     e.preventDefault()
-    const form = e.target as HTMLFormElement
-    const data = new FormData(form.closest("form")!)
+    if (!formRef.current) return
 
-    // Add skills to form data
+    const data = new FormData(formRef.current)
+
     data.set("requiredSkills", skills.join(","))
 
     setFormData(data)
@@ -81,12 +87,10 @@ export default function JobPostForm({ hasWallet }: JobPostFormProps) {
 
   const handlePaymentSuccess = async (transactionHash: string) => {
     if (formData) {
-      // Add transaction hash to form data
       formData.set("transactionHash", transactionHash)
       formData.set("walletAddress", wallet?.address || "")
       formData.set("blockchain", wallet?.type === "phantom" ? "solana" : "ethereum")
 
-      // Submit the form
       formAction(formData)
     }
     setShowPaymentModal(false)
@@ -94,7 +98,7 @@ export default function JobPostForm({ hasWallet }: JobPostFormProps) {
 
   return (
     <>
-      <form className="space-y-6">
+      <form ref={formRef} className="space-y-6">
         {state?.error && (
           <div className="bg-red-500/10 border border-red-500/50 text-red-400 px-4 py-3 rounded-lg">{state.error}</div>
         )}
@@ -179,7 +183,6 @@ export default function JobPostForm({ hasWallet }: JobPostFormProps) {
           </Label>
         </div>
 
-        {/* Salary/Budget Fields */}
         <div className="grid md:grid-cols-2 gap-6">
           <div className="space-y-2">
             <Label className="text-slate-300">
@@ -205,7 +208,6 @@ export default function JobPostForm({ hasWallet }: JobPostFormProps) {
           </div>
         </div>
 
-        {/* Skills Section */}
         <div className="space-y-4">
           <Label className="text-slate-300">Required Skills</Label>
 
@@ -251,7 +253,6 @@ export default function JobPostForm({ hasWallet }: JobPostFormProps) {
           <input type="hidden" name="requiredSkills" value={skills.join(",")} />
         </div>
 
-        {/* Platform Fee Notice */}
         <div className="bg-blue-500/10 border border-blue-500/50 rounded-lg p-4">
           <h3 className="text-blue-400 font-medium mb-2">Platform Fee Required</h3>
           <p className="text-blue-300/80 text-sm mb-2">
